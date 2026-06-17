@@ -1,3 +1,5 @@
 [tools]
+aws = { version = "2.35.6", symlink_bins = "true" }
+aws-vault = "7.12.2"
 node = "26.3.0"
 pnpm = "11.7.0"

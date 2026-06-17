@@ -1,1 +1,7 @@
+# NPM packages
 node_modules/
+
+# TypeScript artifacts
+dist/
+
+mise.local.toml
