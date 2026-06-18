@@ -1,0 +1,5 @@
+[env]
+AWS_PROFILE = "kms-tutorial"
+
+# .KeyMetadata.KeyId or .KeyMetadata.Arn, as returned by CreateKey
+ENCRYPTION_KEY_ID = ""
