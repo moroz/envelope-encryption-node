@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { readFile } from "node:fs";
 import { GenerateDataKeyCommand, KMSClient } from "@aws-sdk/client-kms";
+import { ENCRYPTION_KEY_ID } from "./config.ts";
 
 if (process.stdout.isTTY) {
   console.error("Error: cannot write binary output to a terminal. Pipe the output to a file.");
@@ -10,7 +11,6 @@ if (process.stdout.isTTY) {
 const readFilePromise = promisify(readFile);
 const plaintext = await readFilePromise(process.stdin.fd);
 
-const ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID!;
 const kmsClient = new KMSClient();
 
 const generateKeyResponse = await kmsClient.send(

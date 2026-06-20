@@ -1,45 +1,56 @@
 import { DecryptCommand, KMSClient } from "@aws-sdk/client-kms";
-import { promisify } from "node:util";
 import { readFile } from "node:fs";
+import { promisify } from "node:util";
 import { ENCRYPTION_KEY_ID } from "./config.ts";
 
-const kmsClient = new KMSClient();
-
 const readFilePromise = promisify(readFile);
-const fileContents = await readFilePromise(0);
+const input = await readFilePromise(process.stdin.fd);
 
-const keySizeBuffer = fileContents.subarray(0, 2);
-const keySize = keySizeBuffer.readUint16BE();
-
-const key = fileContents.subarray(2, 2 + keySize);
-if (key.byteLength != keySize) {
-  console.error(`Failed to read ${keySize} bytes from input stream.`);
+if (input.length === 0) {
+  console.error("Failed to read from standard input.");
   process.exit(1);
 }
 
-const decryptResult = await kmsClient
-  .send(
-    new DecryptCommand({
-      KeyId: ENCRYPTION_KEY_ID,
-      CiphertextBlob: key,
-    }),
-  )
-  .catch((e) => {
-    console.error(`Failed to decrypt key`, e);
-    process.exit(1);
-  });
+const versionMarker = input.readUint8();
+if (versionMarker !== 0x01) {
+  const versionMarkerHex = versionMarker.toString(16).padStart(2, "0");
+  console.error(`Unsupported version 0x${versionMarkerHex}.`);
+  process.exit(1);
+}
+
+const keyLength = input.readUint16BE(1);
+const wrappedKey = input.subarray(3, 3 + keyLength);
+if (wrappedKey.byteLength !== keyLength) {
+  console.error(
+    `Failed to read wrapped key from input: Want ${keyLength} bytes, got ${wrappedKey.byteLength}.`,
+  );
+  process.exit(1);
+}
+
+const iv = input.subarray(3 + keyLength, 3 + keyLength + 12);
+if (iv.byteLength !== 12) {
+  console.error("Input too short.");
+  process.exit(1);
+}
+
+const ciphertext = input.subarray(3 + keyLength + 12);
+
+const kmsClient = new KMSClient();
+const unwrappedKey = await kmsClient.send(
+  new DecryptCommand({
+    CiphertextBlob: wrappedKey,
+    KeyId: ENCRYPTION_KEY_ID,
+  }),
+);
 
 const decryptionKey = await crypto.subtle.importKey(
   "raw",
-  decryptResult.Plaintext as Uint8Array<ArrayBuffer>,
+  unwrappedKey.Plaintext as Uint8Array<ArrayBuffer>,
   "AES-GCM",
   false,
   ["decrypt"],
 );
 
-const iv = fileContents.subarray(2 + keySize, 2 + keySize + 12);
-const ciphertext = fileContents.subarray(2 + keySize + 12);
+const plaintext = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, decryptionKey, ciphertext);
 
-const decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, decryptionKey, ciphertext);
-
-process.stdout.write(Buffer.from(decrypted));
+process.stdout.write(new Uint8Array(plaintext));
