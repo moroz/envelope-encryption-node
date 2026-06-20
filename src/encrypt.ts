@@ -1,42 +1,48 @@
-import { GenerateDataKeyCommand, KMSClient } from "@aws-sdk/client-kms";
-import { readFile } from "node:fs";
 import { promisify } from "node:util";
-import { ENCRYPTION_KEY_ID } from "./config.js";
+import { readFile } from "node:fs";
+import { GenerateDataKeyCommand, KMSClient } from "@aws-sdk/client-kms";
 
-const kmsClient = new KMSClient();
+if (process.stdout.isTTY) {
+  console.error("Error: cannot write binary output to a terminal. Pipe the output to a file.");
+  process.exit(2);
+}
 
 const readFilePromise = promisify(readFile);
-const fileContents = await readFilePromise(0);
+const plaintext = await readFilePromise(process.stdin.fd);
 
-let dek, generateDataKeyResponse;
+const ENCRYPTION_KEY_ID = process.env.ENCRYPTION_KEY_ID!;
+const kmsClient = new KMSClient();
 
-try {
-  generateDataKeyResponse = await kmsClient.send(
-    new GenerateDataKeyCommand({
-      KeyId: ENCRYPTION_KEY_ID,
-      KeySpec: "AES_256",
-    }),
-  )!;
-  dek = await crypto.subtle.importKey(
-    "raw",
-    Uint8Array.from(generateDataKeyResponse.Plaintext!),
-    "AES-GCM",
-    false,
-    ["encrypt"],
-  );
-} catch (e) {
-  console.error(`Failed to generate a DEK`, e);
-  process.exit(1);
-}
+const generateKeyResponse = await kmsClient.send(
+  new GenerateDataKeyCommand({
+    KeyId: ENCRYPTION_KEY_ID,
+    KeySpec: "AES_256",
+  }),
+);
+
+const encryptionKey = await crypto.subtle.importKey(
+  "raw",
+  generateKeyResponse.Plaintext as Uint8Array<ArrayBuffer>,
+  "AES-GCM",
+  false,
+  ["encrypt"],
+);
 
 const iv = crypto.getRandomValues(new Uint8Array(12));
 
-const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, dek, fileContents);
+const ciphertext = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, encryptionKey, plaintext);
 
-const keyLength = Buffer.alloc(2);
-keyLength.writeUint16BE(generateDataKeyResponse.CiphertextBlob?.byteLength!);
+const header = Buffer.alloc(3);
+header.writeUint8(1);
+header.writeUint16BE(generateKeyResponse.CiphertextBlob!.byteLength, 1);
 
-process.stdout.write(keyLength);
-process.stdout.write(generateDataKeyResponse.CiphertextBlob!);
-process.stdout.write(iv);
-process.stdout.write(Buffer.from(ciphertext));
+const chunks = [
+  header,
+  generateKeyResponse.CiphertextBlob as Uint8Array<ArrayBuffer>,
+  iv,
+  ciphertext,
+];
+
+for (const chunk of chunks) {
+  process.stdout.write(new Uint8Array(chunk));
+}
